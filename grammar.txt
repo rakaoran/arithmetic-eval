@@ -1,0 +1,62 @@
+####
+A -> A + A | A - A | A * A | A / A | A ^ A | (A) | NUM
+NUM -> 1..99999.. | -NUM
+2 + 5 * 2
+-2 + 3 + 4
+3 + -4
+
+3 + -2 * (2^3^-4^2)
+
+####
+A -> M + A | M - A | M
+
+M -> E * M | E / M | E
+
+E -> F ^ E | F
+
+F -> NUM | (A)
+
+####
+A -> M A'
+A' -> + A | - A | Ɛ
+
+M -> E M'
+M' -> * M | / M | Ɛ
+
+E -> F E'
+E' -> ^ E | Ɛ
+
+F -> NUM | -NUM | (A)
+
+3 + 2 ^ 2 + 5 * 9
+
+FIRST(A)    = -, NUM, (
+FIRST(A')   = +, -, Ɛ
+FIRST(M)    = -, NUM, (
+FIRST(M')   = *, /, Ɛ
+FIRST(E)    = -, NUM, (
+FIRST(E')   = ^, Ɛ
+FIRST(F)    = -, NUM, (
+
+FOLLOW(A)    = ), $
+FOLLOW(A')   = ), $
+FOLLOW(M)    = +, -, ), $
+FOLLOW(M')   = +, -, ), $
+FOLLOW(E)    = +, -, *, /, ), $
+FOLLOW(E')   = +, -, *, /, ), $
+FOLLOW(F)    = +, -, *, /, ^, ), $
+
+SELECT(A' -> + A) = +
+SELECT(A' -> - A) = -
+SELECT(A' -> Ɛ) = ), $
+
+SELECT(M' -> * M) = *
+SELECT(M' -> / M) = /
+SELECT(M' -> Ɛ) = +, -, ), $
+
+SELECT(E' -> ^ E) = ^
+SELECT(E' -> Ɛ) = +, -, *, /, ), $
+
+SELECT(F -> NUM) = NUM
+SELECT(F -> -NUM) = -
+SELECT(F -> (A)) = (

@@ -60,3 +60,18 @@ SELECT(E' -> Ɛ) = +, -, *, /, ), $
 SELECT(F -> NUM) = NUM
 SELECT(F -> -NUM) = -
 SELECT(F -> (A)) = (
+
+################## FINAL VERSION (HOPEFULLY)
+
+A -> M A'
+A' -> + M A' | - M A' | Ɛ
+
+M -> E M'
+M' -> * E M' | / E M' | Ɛ
+
+E -> F E'
+E' -> ^ F E' | Ɛ
+
+        2 ^ 3 ^ 4
+
+F -> -F | +F | num | (A)

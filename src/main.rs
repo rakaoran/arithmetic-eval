@@ -1,21 +1,31 @@
-use std::{iter::Peekable, ops::Add, process::exit, slice::Iter};
+use std::{iter::Peekable, slice::Iter};
 
 fn main() {
-        let str: String = "1 + 2 + 3".into();
-        let tokens = tokenize(str);
-        let parser: Parser = Parser::new(tokens.iter().peekable());
-        let ast = parser.build_ast();
-        println!("{:?}", ast);
-        println!("The tokens: {:?}", &tokens);
+        loop {
+                let mut buf: String = String::new();
+                std::io::stdin().read_line(&mut buf).unwrap();
+
+                let tokens = tokenize(&buf);
+                if let Ok(tokens) = tokens {
+                        let result = Parser::parse(tokens.iter().peekable());
+                        if let Ok(result) = result {
+                                println!("= {}", result.evaluate())
+                        } else {
+                                println!("Syntax error")
+                        }
+                } else {
+                        println!("Unknown symbol")
+                }
+        }
 }
 
-fn tokenize(str: String) -> Vec<Token> {
+fn tokenize(str: &String) -> Result<Vec<Token>, ()> {
         let mut chars = str.chars().peekable();
         let mut tokens = Vec::<Token>::new();
 
         while let Some(&c) = chars.peek() {
                 match c {
-                        ' ' => {
+                        ' ' | '\n' | '\t' => {
                                 chars.next();
                         }
                         '(' => {
@@ -82,14 +92,11 @@ fn tokenize(str: String) -> Vec<Token> {
                                 }
                                 tokens.push(Token::Num(num));
                         }
-                        other => {
-                                println!("wowowowow what is this bro?? {}", other);
-                                exit(1)
-                        }
+                        _ => return Err(()),
                 };
         }
         tokens.push(Token::Eof);
-        tokens
+        Ok(tokens)
 }
 
 #[derive(Debug)]
@@ -111,6 +118,7 @@ enum Op {
         Sub,
         Mul,
         Div,
+        Power,
 }
 
 #[derive(Debug)]
@@ -118,45 +126,24 @@ enum Expression {
         Num(f64),
         Binary {
                 op: Op,
-                left: Box<Expression>,
-                right: Box<Expression>,
+                lhs: Box<Expression>,
+                rhs: Box<Expression>,
         },
 }
 
-#[derive(Debug)]
-enum AddSub {
-        MulDivAddSubPrime(Box<MulDiv>, Box<AddSubPrime>),
-}
-#[derive(Debug)]
-enum AddSubPrime {
-        PlusAddSub(Box<AddSub>),
-        MinusAddSub(Box<AddSub>),
-        None,
-}
-#[derive(Debug)]
-enum MulDiv {
-        ExpoMulDivPrime(Box<Expo>, Box<MulDivPrime>),
-}
-#[derive(Debug)]
-enum MulDivPrime {
-        TimesMulDiv(Box<MulDiv>),
-        DivideMulDiv(Box<MulDiv>),
-        None,
-}
-#[derive(Debug)]
-enum Expo {
-        FExpoPrime(Box<F>, Box<ExpoPrime>),
-}
-#[derive(Debug)]
-enum ExpoPrime {
-        PowerExpo(Box<Expo>),
-        None,
-}
-#[derive(Debug)]
-enum F {
-        Num(f64),
-        MinusNum(f64),
-        ParenthesizedAddSub(Box<AddSub>),
+impl Expression {
+        fn evaluate(&self) -> f64 {
+                match self {
+                        Self::Num(num) => *num,
+                        Self::Binary { op, lhs, rhs } => match op {
+                                Op::Add => lhs.evaluate() + rhs.evaluate(),
+                                Op::Sub => lhs.evaluate() - rhs.evaluate(),
+                                Op::Mul => lhs.evaluate() * rhs.evaluate(),
+                                Op::Div => lhs.evaluate() / rhs.evaluate(),
+                                Op::Power => lhs.evaluate().powf(rhs.evaluate()),
+                        },
+                }
+        }
 }
 
 struct Parser<'a> {
@@ -164,105 +151,134 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+        fn parse(tokens: Peekable<Iter<'a, Token>>) -> Result<Expression, ()> {
+                Ok(*(Self::new(tokens).parse_addsub()?))
+        }
         fn new(tokens: Peekable<Iter<'a, Token>>) -> Self {
                 Self { tokens }
         }
 
-        fn build_ast(mut self) -> Box<AddSub> {
-                self.parse_addsub()
+        fn parse_addsub(&mut self) -> Result<Box<Expression>, ()> {
+                let lhs = self.parse_muldiv()?;
+                self.parse_addsub_prime(lhs)
         }
-
-        fn parse_addsub(&mut self) -> Box<AddSub> {
-                Box::new(AddSub::MulDivAddSubPrime(
-                        self.parse_muldiv(),
-                        self.parse_addsub_prime(),
-                ))
-        }
-
-        fn parse_addsub_prime(&mut self) -> Box<AddSubPrime> {
+        fn parse_addsub_prime(&mut self, mut lhs: Box<Expression>) -> Result<Box<Expression>, ()> {
                 let token = self.tokens.peek().unwrap();
-                match token {
-                        Token::Plus => {
-                                self.tokens.next();
-                                Box::new(AddSubPrime::PlusAddSub(self.parse_addsub()))
-                        }
-                        Token::Minus => {
-                                self.tokens.next();
-                                Box::new(AddSubPrime::MinusAddSub(self.parse_addsub()))
-                        }
-                        Token::Eof => Box::new(AddSubPrime::None),
-                        other => panic!("Unexpected token: {:?}, did you mean '+' or '-' ?", token),
+                let op = match token {
+                        Token::Plus => Some(Op::Add),
+                        Token::Minus => Some(Op::Sub),
+                        Token::RPar | Token::Eof => None,
+                        other => panic!("We found {:?}", other),
+                };
+                if let Some(op) = op {
+                        self.tokens.next();
+                        lhs = Box::new(Expression::Binary {
+                                op: op,
+                                lhs: lhs,
+                                rhs: self.parse_muldiv()?,
+                        });
+                        self.parse_addsub_prime(lhs)
+                } else {
+                        Ok(lhs)
                 }
         }
 
-        fn parse_muldiv(&mut self) -> Box<MulDiv> {
-                Box::new(MulDiv::ExpoMulDivPrime(
-                        self.parse_expo(),
-                        self.parse_muldiv_prime(),
-                ))
+        fn parse_muldiv(&mut self) -> Result<Box<Expression>, ()> {
+                let lhs = self.parse_expo()?;
+                self.parse_muldiv_prime(lhs)
         }
-
-        fn parse_muldiv_prime(&mut self) -> Box<MulDivPrime> {
+        fn parse_muldiv_prime(&mut self, mut lhs: Box<Expression>) -> Result<Box<Expression>, ()> {
                 let token = self.tokens.peek().unwrap();
-                match token {
-                        Token::Star => {
-                                self.tokens.next();
-                                Box::new(MulDivPrime::TimesMulDiv(self.parse_muldiv()))
-                        }
-                        Token::Slash => {
-                                self.tokens.next();
-                                Box::new(MulDivPrime::DivideMulDiv(self.parse_muldiv()))
-                        }
-                        Token::Plus | Token::Minus | Token::RPar | Token::Eof => {
-                                Box::new(MulDivPrime::None)
-                        }
-                        other => panic!(),
+                let op = match token {
+                        Token::Star => Some(Op::Mul),
+                        Token::Slash => Some(Op::Div),
+                        Token::RPar | Token::Eof | Token::Plus | Token::Minus => None,
+                        other => panic!("We found {:?}", other),
+                };
+                if let Some(op) = op {
+                        self.tokens.next();
+                        lhs = Box::new(Expression::Binary {
+                                op: op,
+                                lhs: lhs,
+                                rhs: self.parse_expo()?,
+                        });
+                        self.parse_muldiv_prime(lhs)
+                } else {
+                        Ok(lhs)
                 }
         }
 
-        fn parse_expo(&mut self) -> Box<Expo> {
-                Box::new(Expo::FExpoPrime(self.parse_f(), self.parse_expo_prime()))
+        fn parse_expo(&mut self) -> Result<Box<Expression>, ()> {
+                let lhs = self.parse_f()?;
+                let rhs = self.parse_expo_prime()?;
+                if let Some(rhs) = rhs {
+                        Ok(Box::new(Expression::Binary {
+                                op: Op::Power,
+                                lhs,
+                                rhs,
+                        }))
+                } else {
+                        Ok(lhs)
+                }
         }
-
-        fn parse_expo_prime(&mut self) -> Box<ExpoPrime> {
+        fn parse_expo_prime(&mut self) -> Result<Option<Box<Expression>>, ()> {
                 let token = self.tokens.peek().unwrap();
                 match token {
                         Token::Power => {
                                 self.tokens.next();
-                                Box::new(ExpoPrime::PowerExpo(self.parse_expo()))
+                                let lhs = self.parse_f()?;
+                                let rhs = self.parse_expo_prime()?;
+                                if let Some(boxexpl) = rhs {
+                                        Ok(Some(Box::new(Expression::Binary {
+                                                op: Op::Power,
+                                                lhs: lhs,
+                                                rhs: boxexpl,
+                                        })))
+                                } else {
+                                        Ok(Some(lhs))
+                                }
                         }
-                        Token::Plus
+                        Token::RPar
+                        | Token::Eof
+                        | Token::Plus
                         | Token::Minus
                         | Token::Star
-                        | Token::Slash
-                        | Token::RPar
-                        | Token::Eof => Box::new(ExpoPrime::None),
+                        | Token::Slash => Ok(None),
 
-                        other => panic!("hmmmm what is this token: {:?}", other),
+                        _ => Err(()),
                 }
         }
 
-        fn parse_f(&mut self) -> Box<F> {
-                let token = self.tokens.peek().unwrap();
-                match token {
+        fn parse_f(&mut self) -> Result<Box<Expression>, ()> {
+                let lookahead = self.tokens.peek().unwrap();
+                match lookahead {
                         Token::Num(num) => {
                                 self.tokens.next();
-                                Box::new(F::Num(*num))
+                                Ok(Box::new(Expression::Num(*num)))
                         }
                         Token::Minus => {
                                 self.tokens.next();
-                                let num = *self.parse_f();
-                                if let F::Num(num) = num {
-                                        Box::new(F::MinusNum(num))
-                                } else {
-                                        panic!("- - not allowed for now")
-                                }
+                                Ok(Box::new(Expression::Binary {
+                                        op: Op::Sub,
+                                        lhs: Box::new(Expression::Num(0.0)),
+                                        rhs: self.parse_f()?,
+                                }))
+                        }
+                        Token::Plus => {
+                                self.tokens.next();
+                                self.parse_f()
                         }
                         Token::LPar => {
                                 self.tokens.next();
-                                Box::new(F::ParenthesizedAddSub(self.parse_addsub()))
+                                let a = self.parse_addsub()?;
+                                let next_token = self.tokens.next().unwrap();
+                                if let Token::RPar = next_token {
+                                        Ok(a)
+                                } else {
+                                        Err(())
+                                }
                         }
-                        other => panic!("panic here"),
+                        _ => Err(()),
                 }
         }
 }

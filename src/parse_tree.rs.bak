@@ -1,0 +1,276 @@
+use std::{iter::Peekable, process::exit, slice::Iter};
+
+fn main() {
+        let str: String = "(4 + 3) / 7".into();
+        let tokens = tokenize(str);
+        let parser: Parser = Parser::new(tokens.iter().peekable());
+        let ast = parser.build_ast();
+        println!("{:?}", ast);
+        // println!("The tokens: {:?}", &tokens);
+}
+
+fn tokenize(str: String) -> Vec<Token> {
+        let mut chars = str.chars().peekable();
+        let mut tokens = Vec::<Token>::new();
+
+        while let Some(&c) = chars.peek() {
+                match c {
+                        ' ' => {
+                                chars.next();
+                        }
+                        '(' => {
+                                tokens.push(Token::LPar);
+                                chars.next();
+                        }
+                        ')' => {
+                                tokens.push(Token::RPar);
+                                chars.next();
+                        }
+                        '-' => {
+                                tokens.push(Token::Minus);
+                                chars.next();
+                        }
+                        '+' => {
+                                tokens.push(Token::Plus);
+                                chars.next();
+                        }
+                        '*' => {
+                                tokens.push(Token::Star);
+                                chars.next();
+                        }
+                        '/' => {
+                                tokens.push(Token::Slash);
+                                chars.next();
+                        }
+                        '^' => {
+                                tokens.push(Token::Power);
+                                chars.next();
+                        }
+                        '0'..='9' => {
+                                let mut left_digits: Vec<u32> = Vec::new();
+                                let mut right_digits: Vec<u32> = Vec::new();
+                                while let Some(&d) = chars.peek()
+                                        && d.is_ascii_digit()
+                                {
+                                        left_digits.push(d.to_digit(10).unwrap());
+                                        chars.next();
+                                }
+
+                                if let Some(&d) = chars.peek()
+                                        && d == '.'
+                                {
+                                        chars.next();
+                                        while let Some(&d) = chars.peek()
+                                                && d.is_ascii_digit()
+                                        {
+                                                right_digits.push(d.to_digit(10).unwrap());
+                                                chars.next();
+                                        }
+                                }
+
+                                let mut num: f64 = 0.0;
+                                let mut tens = 1;
+                                left_digits.reverse();
+                                for digit in left_digits {
+                                        num = num + (digit * tens) as f64;
+                                        tens *= 10;
+                                }
+                                let mut decimals = 0.1;
+                                for digit in right_digits {
+                                        num = num + (digit as f64 * decimals);
+                                        decimals /= 10.0;
+                                }
+                                tokens.push(Token::Num(num));
+                        }
+                        other => {
+                                println!("wowowowow what is this bro?? {}", other);
+                                exit(1)
+                        }
+                };
+        }
+        tokens.push(Token::Eof);
+        tokens
+}
+
+#[derive(Debug)]
+enum Token {
+        Num(f64),
+        Plus,
+        Power,
+        Minus,
+        Star,
+        Slash,
+        LPar,
+        RPar,
+        Eof,
+}
+
+#[derive(Debug)]
+enum Op {
+        Add,
+        Sub,
+        Mul,
+        Div,
+}
+
+#[derive(Debug)]
+enum Expression {
+        Num(f64),
+        Binary {
+                op: Op,
+                lhs: Box<Expression>,
+                rhs: Box<Expression>,
+        },
+}
+
+#[derive(Debug)]
+enum AddSub {
+        MulDivAddSubPrime(Box<MulDiv>, Box<AddSubPrime>),
+}
+#[derive(Debug)]
+enum AddSubPrime {
+        PlusAddSub(Box<AddSub>),
+        MinusAddSub(Box<AddSub>),
+        None,
+}
+#[derive(Debug)]
+enum MulDiv {
+        ExpoMulDivPrime(Box<Expo>, Box<MulDivPrime>),
+}
+#[derive(Debug)]
+enum MulDivPrime {
+        TimesMulDiv(Box<MulDiv>),
+        DivideMulDiv(Box<MulDiv>),
+        None,
+}
+#[derive(Debug)]
+enum Expo {
+        FExpoPrime(Box<F>, Box<ExpoPrime>),
+}
+#[derive(Debug)]
+enum ExpoPrime {
+        PowerExpo(Box<Expo>),
+        None,
+}
+#[derive(Debug)]
+enum F {
+        Num(f64),
+        MinusNum(f64),
+        ParenthesizedAddSub(Box<AddSub>),
+}
+
+struct Parser<'a> {
+        tokens: Peekable<Iter<'a, Token>>,
+}
+
+impl<'a> Parser<'a> {
+        fn new(tokens: Peekable<Iter<'a, Token>>) -> Self {
+                Self { tokens }
+        }
+
+        fn build_ast(mut self) -> Box<AddSub> {
+                self.parse_addsub()
+        }
+
+        fn parse_addsub(&mut self) -> Box<AddSub> {
+                Box::new(AddSub::MulDivAddSubPrime(
+                        self.parse_muldiv(),
+                        self.parse_addsub_prime(),
+                ))
+        }
+
+        fn parse_addsub_prime(&mut self) -> Box<AddSubPrime> {
+                let token = self.tokens.peek().unwrap();
+                match token {
+                        Token::Plus => {
+                                self.tokens.next();
+                                Box::new(AddSubPrime::PlusAddSub(self.parse_addsub()))
+                        }
+                        Token::Minus => {
+                                self.tokens.next();
+                                Box::new(AddSubPrime::MinusAddSub(self.parse_addsub()))
+                        }
+                        Token::Eof | Token::RPar => Box::new(AddSubPrime::None),
+                        other => panic!("Unexpected token: {:?}, did you mean '+' or '-' ?", other),
+                }
+        }
+
+        fn parse_muldiv(&mut self) -> Box<MulDiv> {
+                Box::new(MulDiv::ExpoMulDivPrime(
+                        self.parse_expo(),
+                        self.parse_muldiv_prime(),
+                ))
+        }
+
+        fn parse_muldiv_prime(&mut self) -> Box<MulDivPrime> {
+                let token = self.tokens.peek().unwrap();
+                match token {
+                        Token::Star => {
+                                self.tokens.next();
+                                Box::new(MulDivPrime::TimesMulDiv(self.parse_muldiv()))
+                        }
+                        Token::Slash => {
+                                self.tokens.next();
+                                Box::new(MulDivPrime::DivideMulDiv(self.parse_muldiv()))
+                        }
+                        Token::Plus | Token::Minus | Token::RPar | Token::Eof => {
+                                Box::new(MulDivPrime::None)
+                        }
+                        other => panic!(),
+                }
+        }
+
+        fn parse_expo(&mut self) -> Box<Expo> {
+                Box::new(Expo::FExpoPrime(self.parse_f(), self.parse_expo_prime()))
+        }
+
+        fn parse_expo_prime(&mut self) -> Box<ExpoPrime> {
+                let token = self.tokens.peek().unwrap();
+                match token {
+                        Token::Power => {
+                                self.tokens.next();
+                                Box::new(ExpoPrime::PowerExpo(self.parse_expo()))
+                        }
+                        Token::Plus
+                        | Token::Minus
+                        | Token::Star
+                        | Token::Slash
+                        | Token::RPar
+                        | Token::Eof => Box::new(ExpoPrime::None),
+
+                        other => panic!("hmmmm what is this token: {:?}", other),
+                }
+        }
+
+        fn parse_f(&mut self) -> Box<F> {
+                let token = self.tokens.peek().unwrap();
+                match token {
+                        Token::Num(num) => {
+                                self.tokens.next();
+                                Box::new(F::Num(*num))
+                        }
+                        Token::Minus => {
+                                self.tokens.next();
+                                let num = *self.parse_f();
+                                if let F::Num(num) = num {
+                                        Box::new(F::MinusNum(num))
+                                } else {
+                                        panic!("- - not allowed for now")
+                                }
+                        }
+                        Token::LPar => {
+                                self.tokens.next();
+                                let res = Box::new(F::ParenthesizedAddSub(self.parse_addsub()));
+                                let next_token =
+                                        self.tokens.peek().expect("Expression ended unexpectedly");
+                                if let Token::RPar = next_token {
+                                        self.tokens.next();
+                                        res
+                                } else {
+                                        panic!("Expected ), found{:?}", next_token)
+                                }
+                        }
+                        other => panic!("panic here"),
+                }
+        }
+}

@@ -1,9 +1,14 @@
-use std::{iter::Peekable, slice::Iter};
+use std::{iter::Peekable, process::exit, slice::Iter};
 
 fn main() {
         loop {
                 let mut buf: String = String::new();
-                std::io::stdin().read_line(&mut buf).unwrap();
+                let n = std::io::stdin().read_line(&mut buf).unwrap();
+
+                // eof, like in python and node cli you do ctrl-d to quit instead of sending a sigint
+                if n == 0 {
+                        exit(0)
+                }
 
                 let tokens = tokenize(&buf);
                 if let Ok(tokens) = tokens {
@@ -57,40 +62,28 @@ fn tokenize(str: &String) -> Result<Vec<Token>, ()> {
                                 chars.next();
                         }
                         '0'..='9' => {
-                                let mut left_digits: Vec<u32> = Vec::new();
-                                let mut right_digits: Vec<u32> = Vec::new();
+                                let mut num = String::new();
                                 while let Some(&d) = chars.peek()
                                         && d.is_ascii_digit()
                                 {
-                                        left_digits.push(d.to_digit(10).unwrap());
+                                        num.push(d);
                                         chars.next();
                                 }
 
                                 if let Some(&d) = chars.peek()
                                         && d == '.'
                                 {
+                                        num.push(d);
                                         chars.next();
                                         while let Some(&d) = chars.peek()
                                                 && d.is_ascii_digit()
                                         {
-                                                right_digits.push(d.to_digit(10).unwrap());
+                                                num.push(d);
                                                 chars.next();
                                         }
                                 }
 
-                                let mut num: f64 = 0.0;
-                                let mut tens = 1.0;
-                                left_digits.reverse();
-                                for digit in left_digits {
-                                        num = num + digit as f64 * tens;
-                                        tens *= 10.0;
-                                }
-                                let mut decimals = 0.1;
-                                for digit in right_digits {
-                                        num = num + (digit as f64 * decimals);
-                                        decimals /= 10.0;
-                                }
-                                tokens.push(Token::Num(num));
+                                tokens.push(Token::Num(num.parse::<f64>().unwrap()));
                         }
                         _ => return Err(()),
                 };
@@ -285,5 +278,179 @@ impl<'a> Parser<'a> {
                         }
                         _ => Err(()),
                 }
+        }
+}
+
+#[cfg(test)]
+mod tests {
+        use super::*;
+
+        fn evaluate(input: &str) -> Result<f64, ()> {
+                let input = input.to_string();
+                let tokens = tokenize(&input)?;
+                let expression = Parser::parse(tokens.iter().peekable())?;
+                Ok(expression.evaluate())
+        }
+
+        fn assert_evaluates_to(input: &str, expected: f64) {
+                let actual = evaluate(input).unwrap();
+                assert!(
+                        (actual - expected).abs() < 1e-10,
+                        "expected {input} to equal {expected}, got {actual}"
+                );
+        }
+
+        // Normal cases
+
+        #[test]
+        fn adds_two_integers() {
+                assert_evaluates_to("2 + 3", 5.0);
+        }
+
+        #[test]
+        fn adds_decimal_numbers() {
+                assert_evaluates_to("1.25 + 2.75", 4.0);
+        }
+
+        #[test]
+        fn subtracts_from_left_to_right() {
+                assert_evaluates_to("20 - 5 - 3", 12.0);
+        }
+
+        #[test]
+        fn multiplication_precedes_addition() {
+                assert_evaluates_to("2 + 3 * 4", 14.0);
+        }
+
+        #[test]
+        fn parentheses_override_precedence() {
+                assert_evaluates_to("(2 + 3) * 4", 20.0);
+        }
+
+        #[test]
+        fn multiplication_and_division_are_left_associative() {
+                assert_evaluates_to("24 / 3 * 2", 16.0);
+        }
+
+        #[test]
+        fn evaluates_nested_parentheses() {
+                assert_evaluates_to("((2 + 3) * (7 - 4)) / 5", 3.0);
+        }
+
+        #[test]
+        fn raises_number_to_power() {
+                assert_evaluates_to("2 ^ 10", 1024.0);
+        }
+
+        #[test]
+        fn exponentiation_is_right_associative() {
+                assert_evaluates_to("2 ^ 3 ^ 2", 512.0);
+        }
+
+        #[test]
+        fn evaluates_complex_expression() {
+                assert_evaluates_to("((3 + 5) * 2 ^ 3 - 4) / (7 - 3)", 15.0);
+        }
+
+        // Edge cases
+
+        #[test]
+        fn exponentiation_precedes_unary_minus() {
+                assert_evaluates_to("-2 ^ 2", -4.0);
+        }
+
+        #[test]
+        fn parenthesized_negative_base_is_squared() {
+                assert_evaluates_to("(-2) ^ 2", 4.0);
+        }
+
+        #[test]
+        fn explicitly_negated_power_stays_negative() {
+                assert_evaluates_to("-(2 ^ 2)", -4.0);
+        }
+
+        #[test]
+        fn power_inside_negative_exponent_is_evaluated_first() {
+                assert_evaluates_to("2 ^ -2 ^ 2", 0.0625);
+        }
+
+        #[test]
+        fn unary_minus_after_multiplication_has_lower_precedence_than_power() {
+                assert_evaluates_to("3 * -2 ^ 2", -12.0);
+        }
+
+        #[test]
+        fn accepts_decimal_without_leading_zero() {
+                assert_evaluates_to(".5 + .25", 0.75);
+        }
+
+        #[test]
+        fn accepts_decimal_with_trailing_point() {
+                assert_evaluates_to("5. + 2.", 7.0);
+        }
+
+        #[test]
+        fn rejects_number_with_multiple_decimal_points() {
+                assert!(evaluate("1.2.3").is_err());
+        }
+
+        #[test]
+        fn rejects_scientific_notation_when_unsupported() {
+                assert!(evaluate("1e3 + 2").is_err());
+        }
+
+        #[test]
+        fn division_by_zero_is_infinite() {
+                assert!(evaluate("1 / 0").unwrap().is_infinite());
+        }
+
+        #[test]
+        fn zero_divided_by_zero_is_nan() {
+                assert!(evaluate("0 / 0").unwrap().is_nan());
+        }
+
+        #[test]
+        fn rejects_empty_expression() {
+                assert!(evaluate("").is_err());
+        }
+
+        #[test]
+        fn rejects_whitespace_only_expression() {
+                assert!(evaluate(" \t\n ").is_err());
+        }
+
+        #[test]
+        fn rejects_empty_parentheses() {
+                assert!(evaluate("()").is_err());
+        }
+
+        #[test]
+        fn rejects_missing_closing_parenthesis() {
+                assert!(evaluate("2 * (3 + 4").is_err());
+        }
+
+        #[test]
+        fn rejects_unexpected_closing_parenthesis() {
+                assert!(evaluate("2 + 3)").is_err());
+        }
+
+        #[test]
+        fn rejects_missing_left_operand() {
+                assert!(evaluate("* 2").is_err());
+        }
+
+        #[test]
+        fn rejects_missing_right_operand() {
+                assert!(evaluate("2 +").is_err());
+        }
+
+        #[test]
+        fn rejects_consecutive_binary_operators() {
+                assert!(evaluate("2 * / 3").is_err());
+        }
+
+        #[test]
+        fn rejects_implicit_multiplication() {
+                assert!(evaluate("(2 + 1)(3 + 1)").is_err());
         }
 }

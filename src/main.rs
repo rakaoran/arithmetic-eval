@@ -30,7 +30,7 @@ fn tokenize(str: &String) -> Result<Vec<Token>, ()> {
 
         while let Some(&c) = chars.peek() {
                 match c {
-                        ' ' | '\n' | '\t' => {
+                        ' ' | '\n' | '\t' | '\r' => {
                                 chars.next();
                         }
                         '(' => {
@@ -83,7 +83,7 @@ fn tokenize(str: &String) -> Result<Vec<Token>, ()> {
                                         }
                                 }
 
-                                tokens.push(Token::Num(num.parse::<f64>().unwrap()));
+                                tokens.push(Token::Num(num.parse::<f64>().map_err(|_| ())?));
                         }
                         _ => return Err(()),
                 };
@@ -129,13 +129,24 @@ impl Expression {
         fn evaluate(&self) -> f64 {
                 match self {
                         Self::Num(num) => *num,
-                        Self::MinusExp(exp) => -*&exp.evaluate(),
+                        Self::MinusExp(exp) => -exp.evaluate(),
                         Self::Binary { op, lhs, rhs } => match op {
                                 Op::Add => lhs.evaluate() + rhs.evaluate(),
                                 Op::Sub => lhs.evaluate() - rhs.evaluate(),
                                 Op::Mul => lhs.evaluate() * rhs.evaluate(),
                                 Op::Div => lhs.evaluate() / rhs.evaluate(),
-                                Op::Power => lhs.evaluate().powf(rhs.evaluate()),
+                                Op::Power => {
+                                        if let Self::MinusExp(exp) = &**lhs {
+                                                let newexp = Expression::Binary {
+                                                        op: Op::Power,
+                                                        lhs: Box::new(*exp.clone()),
+                                                        rhs: rhs.clone(),
+                                                };
+                                                -newexp.evaluate()
+                                        } else {
+                                                lhs.evaluate().powf(rhs.evaluate())
+                                        }
+                                }
                         },
                 }
         }
@@ -173,8 +184,8 @@ impl<'a> Parser<'a> {
                 if let Some(op) = op {
                         self.tokens.next();
                         lhs = Box::new(Expression::Binary {
-                                op: op,
-                                lhs: lhs,
+                                op,
+                                lhs,
                                 rhs: self.parse_muldiv()?,
                         });
                         self.parse_addsub_prime(lhs)
@@ -211,29 +222,14 @@ impl<'a> Parser<'a> {
         fn parse_expo(&mut self) -> Result<Box<Expression>, ()> {
                 let lhs = self.parse_f()?;
                 let rhs = self.parse_expo_prime()?;
-                if let Expression::MinusExp(exp) = &*lhs {
-                        // let exp = Box::new(exp);
-                        if let Some(rhs) = rhs {
-                                Ok(Box::new(Expression::MinusExp(Box::new(
-                                        Expression::Binary {
-                                                op: Op::Power,
-                                                lhs: exp.clone(),
-                                                rhs,
-                                        },
-                                ))))
-                        } else {
-                                Ok(lhs)
-                        }
+                if let Some(rhs) = rhs {
+                        Ok(Box::new(Expression::Binary {
+                                op: Op::Power,
+                                lhs,
+                                rhs,
+                        }))
                 } else {
-                        if let Some(rhs) = rhs {
-                                Ok(Box::new(Expression::Binary {
-                                        op: Op::Power,
-                                        lhs,
-                                        rhs,
-                                }))
-                        } else {
-                                Ok(lhs)
-                        }
+                        Ok(lhs)
                 }
         }
         fn parse_expo_prime(&mut self) -> Result<Option<Box<Expression>>, ()> {
@@ -243,28 +239,14 @@ impl<'a> Parser<'a> {
                                 self.tokens.next();
                                 let lhs = self.parse_f()?;
                                 let rhs = self.parse_expo_prime()?;
-                                if let Expression::MinusExp(exp) = &*lhs {
-                                        if let Some(boxexpl) = rhs {
-                                                Ok(Some(Box::new(Expression::MinusExp(Box::new(
-                                                        Expression::Binary {
-                                                                op: Op::Power,
-                                                                lhs: exp.clone(),
-                                                                rhs: boxexpl,
-                                                        },
-                                                )))))
-                                        } else {
-                                                Ok(Some(lhs))
-                                        }
+                                if let Some(boxexpl) = rhs {
+                                        Ok(Some(Box::new(Expression::Binary {
+                                                op: Op::Power,
+                                                lhs: lhs,
+                                                rhs: boxexpl,
+                                        })))
                                 } else {
-                                        if let Some(boxexpl) = rhs {
-                                                Ok(Some(Box::new(Expression::Binary {
-                                                        op: Op::Power,
-                                                        lhs: lhs,
-                                                        rhs: boxexpl,
-                                                })))
-                                        } else {
-                                                Ok(Some(lhs))
-                                        }
+                                        Ok(Some(lhs))
                                 }
                         }
                         Token::RPar
@@ -486,5 +468,42 @@ mod tests {
         #[test]
         fn rejects_implicit_multiplication() {
                 assert!(evaluate("(2 + 1)(3 + 1)").is_err());
+        }
+
+        // Regressions: malformed decimals must return errors without panicking.
+
+        #[test]
+        fn rejects_bare_decimal_point() {
+                assert!(evaluate(".").is_err());
+        }
+
+        #[test]
+        fn rejects_bare_decimal_point_after_operator() {
+                assert!(evaluate("1+.").is_err());
+        }
+
+        #[test]
+        fn rejects_two_trailing_decimal_points() {
+                assert!(evaluate("1..").is_err());
+        }
+
+        #[test]
+        fn repeated_unary_minus_applies_after_power() {
+                assert_evaluates_to("--2^2", 4.0);
+        }
+
+        #[test]
+        fn repeated_unary_minus_in_exponent_applies_after_power() {
+                assert_evaluates_to("2^--2^2", 16.0);
+        }
+
+        #[test]
+        fn repeated_unary_minus_preserves_fractional_power() {
+                assert_evaluates_to("--4^.5", 2.0);
+        }
+
+        #[test]
+        fn accepts_windows_line_endings() {
+                assert_evaluates_to("1+2\r\n", 3.0);
         }
 }

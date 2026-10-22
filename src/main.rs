@@ -61,7 +61,7 @@ fn tokenize(str: &String) -> Result<Vec<Token>, ()> {
                                 tokens.push(Token::Power);
                                 chars.next();
                         }
-                        '0'..='9' => {
+                        '0'..='9' | '.' => {
                                 let mut num = String::new();
                                 while let Some(&d) = chars.peek()
                                         && d.is_ascii_digit()
@@ -105,7 +105,7 @@ enum Token {
         Eof,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Op {
         Add,
         Sub,
@@ -114,9 +114,10 @@ enum Op {
         Power,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Expression {
         Num(f64),
+        MinusExp(Box<Expression>),
         Binary {
                 op: Op,
                 lhs: Box<Expression>,
@@ -128,6 +129,7 @@ impl Expression {
         fn evaluate(&self) -> f64 {
                 match self {
                         Self::Num(num) => *num,
+                        Self::MinusExp(exp) => -*&exp.evaluate(),
                         Self::Binary { op, lhs, rhs } => match op {
                                 Op::Add => lhs.evaluate() + rhs.evaluate(),
                                 Op::Sub => lhs.evaluate() - rhs.evaluate(),
@@ -209,14 +211,29 @@ impl<'a> Parser<'a> {
         fn parse_expo(&mut self) -> Result<Box<Expression>, ()> {
                 let lhs = self.parse_f()?;
                 let rhs = self.parse_expo_prime()?;
-                if let Some(rhs) = rhs {
-                        Ok(Box::new(Expression::Binary {
-                                op: Op::Power,
-                                lhs,
-                                rhs,
-                        }))
+                if let Expression::MinusExp(exp) = &*lhs {
+                        // let exp = Box::new(exp);
+                        if let Some(rhs) = rhs {
+                                Ok(Box::new(Expression::MinusExp(Box::new(
+                                        Expression::Binary {
+                                                op: Op::Power,
+                                                lhs: exp.clone(),
+                                                rhs,
+                                        },
+                                ))))
+                        } else {
+                                Ok(lhs)
+                        }
                 } else {
-                        Ok(lhs)
+                        if let Some(rhs) = rhs {
+                                Ok(Box::new(Expression::Binary {
+                                        op: Op::Power,
+                                        lhs,
+                                        rhs,
+                                }))
+                        } else {
+                                Ok(lhs)
+                        }
                 }
         }
         fn parse_expo_prime(&mut self) -> Result<Option<Box<Expression>>, ()> {
@@ -226,14 +243,28 @@ impl<'a> Parser<'a> {
                                 self.tokens.next();
                                 let lhs = self.parse_f()?;
                                 let rhs = self.parse_expo_prime()?;
-                                if let Some(boxexpl) = rhs {
-                                        Ok(Some(Box::new(Expression::Binary {
-                                                op: Op::Power,
-                                                lhs: lhs,
-                                                rhs: boxexpl,
-                                        })))
+                                if let Expression::MinusExp(exp) = &*lhs {
+                                        if let Some(boxexpl) = rhs {
+                                                Ok(Some(Box::new(Expression::MinusExp(Box::new(
+                                                        Expression::Binary {
+                                                                op: Op::Power,
+                                                                lhs: exp.clone(),
+                                                                rhs: boxexpl,
+                                                        },
+                                                )))))
+                                        } else {
+                                                Ok(Some(lhs))
+                                        }
                                 } else {
-                                        Ok(Some(lhs))
+                                        if let Some(boxexpl) = rhs {
+                                                Ok(Some(Box::new(Expression::Binary {
+                                                        op: Op::Power,
+                                                        lhs: lhs,
+                                                        rhs: boxexpl,
+                                                })))
+                                        } else {
+                                                Ok(Some(lhs))
+                                        }
                                 }
                         }
                         Token::RPar
@@ -256,11 +287,7 @@ impl<'a> Parser<'a> {
                         }
                         Token::Minus => {
                                 self.tokens.next();
-                                Ok(Box::new(Expression::Binary {
-                                        op: Op::Sub,
-                                        lhs: Box::new(Expression::Num(0.0)),
-                                        rhs: self.parse_f()?,
-                                }))
+                                Ok(Box::new(Expression::MinusExp(self.parse_f()?)))
                         }
                         Token::Plus => {
                                 self.tokens.next();
@@ -271,6 +298,13 @@ impl<'a> Parser<'a> {
                                 let a = self.parse_addsub()?;
                                 let next_token = self.tokens.next().unwrap();
                                 if let Token::RPar = next_token {
+                                        if let Expression::MinusExp(exp) = &*a {
+                                                return Ok(Box::new(Expression::Binary {
+                                                        op: Op::Sub,
+                                                        lhs: Box::new(Expression::Num(0.0)),
+                                                        rhs: exp.clone(),
+                                                }));
+                                        }
                                         Ok(a)
                                 } else {
                                         Err(())

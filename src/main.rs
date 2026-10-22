@@ -79,11 +79,11 @@ fn tokenize(str: &String) -> Result<Vec<Token>, ()> {
                                 }
 
                                 let mut num: f64 = 0.0;
-                                let mut tens = 1;
+                                let mut tens = 1.0;
                                 left_digits.reverse();
                                 for digit in left_digits {
-                                        num = num + (digit * tens) as f64;
-                                        tens *= 10;
+                                        num = num + digit as f64 * tens;
+                                        tens *= 10.0;
                                 }
                                 let mut decimals = 0.1;
                                 for digit in right_digits {
@@ -152,7 +152,12 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
         fn parse(tokens: Peekable<Iter<'a, Token>>) -> Result<Expression, ()> {
-                Ok(*(Self::new(tokens).parse_addsub()?))
+                let mut parser = Self::new(tokens);
+                let result = parser.parse_addsub()?;
+                if parser.tokens.len() != 1 {
+                        return Err(());
+                }
+                Ok(*result)
         }
         fn new(tokens: Peekable<Iter<'a, Token>>) -> Self {
                 Self { tokens }
@@ -168,7 +173,7 @@ impl<'a> Parser<'a> {
                         Token::Plus => Some(Op::Add),
                         Token::Minus => Some(Op::Sub),
                         Token::RPar | Token::Eof => None,
-                        other => panic!("We found {:?}", other),
+                        _ => return Err(()),
                 };
                 if let Some(op) = op {
                         self.tokens.next();
@@ -193,7 +198,7 @@ impl<'a> Parser<'a> {
                         Token::Star => Some(Op::Mul),
                         Token::Slash => Some(Op::Div),
                         Token::RPar | Token::Eof | Token::Plus | Token::Minus => None,
-                        other => panic!("We found {:?}", other),
+                        _ => return Err(()),
                 };
                 if let Some(op) = op {
                         self.tokens.next();
